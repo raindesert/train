@@ -21,6 +21,15 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _unwrap_torch_like(other):
+    """Tensor 运算前把 other 拆出 ndarray — module-level helper."""
+    if isinstance(other, FakeTorch.Tensor):
+        return other.data
+    if hasattr(other, 'data'):  # Parameter 等
+        return other.data
+    return other
+
+
 class FakeTorch:
     """最小 torch 替代 — 让 Trainer / Model / Forward 在 numpy 上能跑."""
 
@@ -28,12 +37,17 @@ class FakeTorch:
     float16 = np.float16
     bfloat16 = np.float16  # 退化
     long = np.int64
+    int64 = np.int64
+    int32 = np.int32
+    bool = np.bool_       # torch.bool == np.bool_
     bool_ = bool
 
     class Tensor:
         def __init__(self, data):
             if isinstance(data, np.ndarray):
                 self.data = data
+            elif isinstance(data, FakeTorch.Tensor):
+                self.data = data.data
             else:
                 self.data = np.array(data)
             self.requires_grad = False
@@ -41,9 +55,6 @@ class FakeTorch:
 
         def __repr__(self):
             return f"FakeTensor(shape={self.data.shape})"
-
-        def to(self, *args, **kw):
-            return self
 
         @property
         def shape(self):
@@ -53,118 +64,200 @@ class FakeTorch:
         def dtype(self):
             return self.data.dtype
 
+        @property
+        def ndim(self):
+            return self.data.ndim
+
+        @property
+        def size(self):
+            return self.data.size
+
+        # PyTorch 的 Tensor.size(dim) 是 method — 接受 dim 返回该维大小
+        def _size_method(self, dim=None):
+            if dim is None:
+                return self.data.size
+            return self.data.shape[dim]
+        # 用 __class__ trick: 把 size 同时当 property 和 method 不可能 — 改用 instance attr
+        # 但 llama.py 调的是 shift_logits.size(-1) — 必须是 method
+        # 修法: 不设 property, 只设 method
+        size = _size_method  # 覆盖 property
+
+        # --- 视图 / 变形 ---
         def view(self, *shape):
             return FakeTorch.Tensor(self.data.reshape(shape))
 
+        def reshape(self, *shape):
+            return FakeTorch.Tensor(self.data.reshape(shape))
+
         def transpose(self, *axes):
-            # numpy 2.x: transpose 用 list/tuple 更稳
             if len(axes) == 1 and isinstance(axes[0], (tuple, list)):
                 axes = tuple(axes[0])
             if len(axes) == 2:
-                # 2-arg transpose 等价 swapaxes
                 return FakeTorch.Tensor(self.data.swapaxes(axes[0], axes[1]))
             return FakeTorch.Tensor(self.data.transpose(list(axes)))
 
         def contiguous(self):
             return FakeTorch.Tensor(np.ascontiguousarray(self.data))
 
+        def to(self, *args, **kw):
+            # 支持 device 字符串 / dtype
+            if not args:
+                return self
+            a = args[0]
+            if isinstance(a, str):
+                return self
+            if a in (FakeTorch.float32, np.float32, "float32"):
+                return FakeTorch.Tensor(self.data.astype(np.float32))
+            if a in (FakeTorch.float16, np.float16, "float16"):
+                return FakeTorch.Tensor(self.data.astype(np.float16))
+            if a in (FakeTorch.long, np.int64, "int64"):
+                return FakeTorch.Tensor(self.data.astype(np.int64))
+            return self
+
         def float(self):
             return FakeTorch.Tensor(self.data.astype(np.float32))
 
-        def __pow__(self, other):
-            if isinstance(other, FakeTorch.Tensor):
-                other = other.data
-            return FakeTorch.Tensor(self.data ** other)
-        def __rpow__(self, other):
-            return FakeTorch.Tensor(other ** self.data)
+        def long(self):
+            return FakeTorch.Tensor(self.data.astype(np.int64))
 
+        def cpu(self):
+            return self
+
+        def numel(self):
+            return self.data.size
+
+        # --- 维度操作 ---
         def unsqueeze(self, dim):
             return FakeTorch.Tensor(np.expand_dims(self.data, dim))
+
+        def squeeze(self, dim=None):
+            return FakeTorch.Tensor(np.squeeze(self.data, axis=dim))
 
         def chunk(self, n, dim=-1):
             return [FakeTorch.Tensor(x) for x in np.split(self.data, n, axis=dim)]
 
-        def cat(self, tensors, dim=-1):
-            return FakeTorch.Tensor(np.concatenate([t.data for t in tensors], axis=dim))
 
         def pow(self, p):
+            if isinstance(p, FakeTorch.Tensor):
+                p = p.data
             return FakeTorch.Tensor(self.data ** p)
 
-        def mean(self, dim, keepdim=False):
+        def mean(self, dim=None, keepdim=False):
+            if dim is None:
+                return FakeTorch.Tensor(self.data.mean())
             return FakeTorch.Tensor(self.data.mean(axis=dim, keepdims=keepdim))
 
-        def add(self, x):
-            if isinstance(x, FakeTorch.Tensor):
-                x = x.data
-            return FakeTorch.Tensor(self.data + x)
-        def __add__(self, other):
-            if isinstance(other, FakeTorch.Tensor):
-                other = other.data
-            return FakeTorch.Tensor(self.data + other)
+        def sum(self, dim=None, keepdim=False):
+            if dim is None:
+                return FakeTorch.Tensor(self.data.sum())
+            return FakeTorch.Tensor(self.data.sum(axis=dim, keepdims=keepdim))
 
-        def rsqrt(self):
-            return FakeTorch.Tensor(1.0 / np.sqrt(self.data))
+        def argmax(self, dim=-1, keepdim=False):
+            return FakeTorch.Tensor(self.data.argmax(axis=dim, keepdims=keepdim))
 
-        def softmax(self, dim=-1):
-            e = np.exp(self.data - self.data.max(axis=dim, keepdims=True))
-            return FakeTorch.Tensor(e / e.sum(axis=dim, keepdims=True))
-
-        def matmul(self, other):
-            if isinstance(other, FakeTorch.Tensor):
-                other = other.data
-            return FakeTorch.Tensor(self.data @ other)
-
-        def __radd__(self, other): return FakeTorch.Tensor(other + self.data)
-        def __rsub__(self, other): return FakeTorch.Tensor(other - self.data)
-        def __rmul__(self, other): return FakeTorch.Tensor(other * self.data)
-        def __rtruediv__(self, other): return FakeTorch.Tensor(other / self.data)
-        def __neg__(self): return FakeTorch.Tensor(-self.data)
-        def __sub__(self, other):
-            if isinstance(other, FakeTorch.Tensor): other = other.data
-            return FakeTorch.Tensor(self.data - other)
-        def __mul__(self, other):
-            if isinstance(other, FakeTorch.Tensor): other = other.data
-            return FakeTorch.Tensor(self.data * other)
-        def __truediv__(self, other):
-            if isinstance(other, FakeTorch.Tensor): other = other.data
-            return FakeTorch.Tensor(self.data / other)
-        def __rdiv__(self, other): return self.__rtruediv__(other)
-
-        def __matmul__(self, other):
-            return self.matmul(other)
-
+        # --- 三角 / math ---
         def cos(self): return FakeTorch.Tensor(np.cos(self.data))
         def sin(self): return FakeTorch.Tensor(np.sin(self.data))
         def tanh(self): return FakeTorch.Tensor(np.tanh(self.data))
         def sqrt(self): return FakeTorch.Tensor(np.sqrt(self.data))
         def abs(self): return FakeTorch.Tensor(np.abs(self.data))
-        def sum(self, dim=None, keepdim=False):
-            return FakeTorch.Tensor(self.data.sum(axis=dim, keepdims=keepdim))
-        def argmax(self, dim=-1, keepdim=False):
-            return FakeTorch.Tensor(self.data.argmax(axis=dim, keepdims=keepdim))
-        def to(self, *args, **kw):
-            if args and isinstance(args[0], str):  # device
-                return self
-            if args and args[0] in (FakeTorch.float32, np.float32, "float32"):
-                return FakeTorch.Tensor(self.data.astype(np.float32))
-            if args and args[0] in (FakeTorch.float16, np.float16, "float16"):
-                return FakeTorch.Tensor(self.data.astype(np.float16))
-            return self
+        def rsqrt(self): return FakeTorch.Tensor(1.0 / np.sqrt(self.data))
 
+        def tril(self):
+            n = self.data.shape[-1]
+            return FakeTorch.Tensor(np.tril(np.ones((n, n), dtype=bool)))
+
+        def triu(self):
+            n = self.data.shape[-1]
+            return FakeTorch.Tensor(np.triu(np.ones((n, n), dtype=bool)))
+
+        # --- Softmax 系列 ---
+        def softmax(self, dim=-1):
+            e = np.exp(self.data - self.data.max(axis=dim, keepdims=True))
+            return FakeTorch.Tensor(e / e.sum(axis=dim, keepdims=True))
+
+        def log_softmax(self, dim=-1):
+            m = self.data.max(axis=dim, keepdims=True)
+            shifted = self.data - m
+            return FakeTorch.Tensor(shifted - np.log(np.exp(shifted).sum(axis=dim, keepdims=True)))
+
+        def cross_entropy(self, target, ignore_index=-100):
+            """简化版 cross_entropy: input (N, V), target (N,)."""
+            N, V = self.data.shape
+            m = self.data.max(axis=-1, keepdims=True)
+            log_probs = self.data - m - np.log(np.exp(self.data - m).sum(axis=-1, keepdims=True))
+            if hasattr(target, 'data'):
+                t = target.data.astype(np.int64)
+            else:
+                t = np.asarray(target).astype(np.int64)
+            mask = (t != ignore_index)
+            nll = -log_probs[np.arange(N), t]
+            if mask.all():
+                return FakeTorch.Tensor(nll.mean())
+            return FakeTorch.Tensor(nll[mask].mean() if mask.any() else nll.mean())
+
+        # --- masked_fill (支持广播) ---
+        def masked_fill(self, mask, value):
+            if hasattr(mask, 'data') and not isinstance(mask, FakeTorch.Tensor):
+                mask = mask.data
+            if isinstance(mask, FakeTorch.Tensor):
+                mask = mask.data
+            try:
+                out = self.data.copy()
+                out[mask] = value
+                return FakeTorch.Tensor(out)
+            except (IndexError, ValueError):
+                m_b = np.broadcast_to(mask, self.data.shape)
+                out = self.data.copy()
+                out[m_b] = value
+                return FakeTorch.Tensor(out)
+
+        # --- 二元运算 (防御 Parameter / 带 .data 的非 Tensor 对象) ---
+        def add(self, other):
+            return self.__add__(other)
+        def sub(self, other):
+            return self.__sub__(other)
+        def mul(self, other):
+            return self.__mul__(other)
+        def div(self, other):
+            return self.__truediv__(other)
+        def __add__(self, other):
+            return FakeTorch.Tensor(self.data + _unwrap_torch_like(other))
+        def __radd__(self, other):
+            return FakeTorch.Tensor(_unwrap_torch_like(other) + self.data)
+        def __sub__(self, other):
+            return FakeTorch.Tensor(self.data - _unwrap_torch_like(other))
+        def __rsub__(self, other):
+            return FakeTorch.Tensor(_unwrap_torch_like(other) - self.data)
+        def __mul__(self, other):
+            return FakeTorch.Tensor(self.data * _unwrap_torch_like(other))
+        def __rmul__(self, other):
+            return FakeTorch.Tensor(_unwrap_torch_like(other) * self.data)
+        def __truediv__(self, other):
+            return FakeTorch.Tensor(self.data / _unwrap_torch_like(other))
+        def __rtruediv__(self, other):
+            return FakeTorch.Tensor(_unwrap_torch_like(other) / self.data)
+        def __pow__(self, other):
+            return FakeTorch.Tensor(self.data ** _unwrap_torch_like(other))
+        def __rpow__(self, other):
+            return FakeTorch.Tensor(_unwrap_torch_like(other) ** self.data)
+        def __matmul__(self, other):
+            return FakeTorch.Tensor(self.data @ _unwrap_torch_like(other))
+        def __rmatmul__(self, other):
+            return FakeTorch.Tensor(_unwrap_torch_like(other) @ self.data)
+        def __neg__(self): return FakeTorch.Tensor(-self.data)
+        def __invert__(self):
+            return FakeTorch.Tensor(~self.data.astype(bool))
+
+        # --- 索引 ---
         def __getitem__(self, idx):
             return FakeTorch.Tensor(self.data[idx])
 
-        def cpu(self):
-            return self
-
-        def numpy(self):
-            return self.data
-
-        def numel(self):
-            return self.data.size
-
-        def backward(self):
-            pass
+        # --- 比较 ---
+        def __lt__(self, other): return FakeTorch.Tensor(self.data < _unwrap_torch_like(other))
+        def __le__(self, other): return FakeTorch.Tensor(self.data <= _unwrap_torch_like(other))
+        def __gt__(self, other): return FakeTorch.Tensor(self.data > _unwrap_torch_like(other))
+        def __ge__(self, other): return FakeTorch.Tensor(self.data >= _unwrap_torch_like(other))
 
     @staticmethod
     def tensor(data, dtype=None):
@@ -173,19 +266,23 @@ class FakeTorch:
         return FakeTorch.Tensor(np.array(data, dtype=dtype or np.float32))
 
     @staticmethod
-    def stack(tensors, dim=0):
-        return FakeTorch.Tensor(np.stack([t.data for t in tensors], axis=dim))
+    def cat(tensors, dim=-1):
+        return FakeTorch.Tensor(np.concatenate(
+            [t.data if isinstance(t, FakeTorch.Tensor) else np.asarray(t) for t in tensors],
+            axis=dim))
 
     @staticmethod
-    def cat(tensors, dim=0):
-        return FakeTorch.Tensor(np.concatenate([t.data for t in tensors], axis=dim))
+    def stack(tensors, dim=0):
+        return FakeTorch.Tensor(np.stack(
+            [t.data if isinstance(t, FakeTorch.Tensor) else np.asarray(t) for t in tensors],
+            axis=dim))
 
     @staticmethod
     def multinomial(probs, num_samples=1):
-        # probs is FakeTorch.Tensor; data shape (B, V)
         out = np.zeros((probs.data.shape[0], num_samples), dtype=np.int64)
         for b in range(probs.data.shape[0]):
-            out[b] = np.random.choice(probs.data.shape[1], size=num_samples, p=probs.data[b] / probs.data[b].sum())
+            out[b] = np.random.choice(probs.data.shape[1], size=num_samples,
+                                       p=probs.data[b] / probs.data[b].sum())
         return FakeTorch.Tensor(out)
 
     @staticmethod
@@ -204,16 +301,31 @@ class FakeTorch:
 
     @staticmethod
     def masked_fill(x, mask, value):
-        out = x.data.copy()
+        if hasattr(x, 'data') and not isinstance(x, FakeTorch.Tensor):
+            x = x.data
+        if isinstance(x, FakeTorch.Tensor):
+            x = x.data
+        if hasattr(mask, 'data') and not isinstance(mask, FakeTorch.Tensor):
+            mask = mask.data
         if isinstance(mask, FakeTorch.Tensor):
             mask = mask.data
-        out[mask] = value
-        return FakeTorch.Tensor(out)
+        try:
+            out = x.copy()
+            out[mask] = value
+            return FakeTorch.Tensor(out)
+        except (IndexError, ValueError):
+            m_b = np.broadcast_to(mask, x.shape)
+            out = x.copy()
+            out[m_b] = value
+            return FakeTorch.Tensor(out)
 
     @staticmethod
     def masked_scatter(x, mask, src):
-        # src is (B, V); for each b, scatter row src[b] where mask[b]
-        out = x.data.copy()
+        out = x.data.copy() if hasattr(x, 'data') else x.copy()
+        if hasattr(mask, 'data'):
+            mask = mask.data
+        if hasattr(src, 'data'):
+            src = src.data
         for b in range(out.shape[0]):
             idx = np.where(mask[b])[0]
             out[b, idx] = src[b, idx]
@@ -221,37 +333,42 @@ class FakeTorch:
 
     @staticmethod
     def scatter(dim, index, src):
-        out = src.data.copy()
-        return FakeTorch.Tensor(out)
+        if hasattr(src, 'data'):
+            return FakeTorch.Tensor(src.data.copy())
+        return FakeTorch.Tensor(np.asarray(src).copy())
 
     @staticmethod
     def tril(x):
-        n = x.data.shape[-1]
-        return FakeTorch.Tensor(np.tril(x.data))
+        n = x.data.shape[-1] if hasattr(x, 'data') else x.shape[-1]
+        return FakeTorch.Tensor(np.tril(np.ones((n, n), dtype=bool)))
 
     @staticmethod
-    def ones(*shape, dtype=None):
+    def ones(*shape, dtype=None, device=None):
+        # 忽略 device (FakeTorch 只支持 cpu)
         return FakeTorch.Tensor(np.ones(shape, dtype=dtype or np.float32))
 
     @staticmethod
+    def zeros(*shape, dtype=None, device=None):
+        return FakeTorch.Tensor(np.zeros(shape, dtype=dtype or np.float32))
+
+    @staticmethod
     def arange(start, end=None, step=1, dtype=None, device=None):
-        # 支持 1/2/3 位置参数
         if end is None:
             end = start
             start = 0
         if dtype is None or dtype == FakeTorch.float32:
             return FakeTorch.Tensor(np.arange(start, end, step, dtype=np.float32))
-        if dtype == FakeTorch.long or dtype == np.int64:
+        if dtype in (FakeTorch.long, FakeTorch.int64, np.int64):
             return FakeTorch.Tensor(np.arange(start, end, step, dtype=np.int64))
         return FakeTorch.Tensor(np.arange(start, end, step, dtype=np.float32))
 
     @staticmethod
     def einsum(s, *tensors):
-        return FakeTorch.Tensor(np.einsum(s, *[t.data for t in tensors]))
+        return FakeTorch.Tensor(np.einsum(s, *[t.data if hasattr(t, 'data') else np.asarray(t) for t in tensors]))
 
     @staticmethod
     def sqrt(x):
-        if isinstance(x, FakeTorch.Tensor):
+        if hasattr(x, 'data'):
             return FakeTorch.Tensor(np.sqrt(x.data))
         return np.sqrt(x)
 
@@ -270,7 +387,6 @@ class FakeTorch:
     @staticmethod
     def save(obj, path):
         """numpy 序列化: 用 np.savez 存 state_dict."""
-        # 自动把 .pt 后缀改成 .npz 以匹配 np.savez
         if str(path).endswith(".pt"):
             path = str(path).replace(".pt", ".npz")
         if isinstance(obj, dict):
@@ -325,24 +441,30 @@ class FakeTorch:
             def add_module(self, name, module):
                 self._modules[name] = module
             def register_buffer(self, name, tensor, persistent=True):
-                self._buffers[name] = tensor
+                # 同时存: instance attr (FakeTorch.Tensor, 真代码当 tensor 用) + _buffers (ndarray, 用于序列化)
+                if isinstance(tensor, FakeTorch.Tensor):
+                    self._buffers[name] = tensor.data.copy()
+                else:
+                    self._buffers[name] = np.asarray(tensor)
                 object.__setattr__(self, name, tensor)
             def register_parameter(self, name, param):
                 self._params[name] = param
                 object.__setattr__(self, name, param)
             def apply(self, fn):
-                # 递归应用 fn 到每个子模块
                 fn(self)
                 for m in self._modules.values():
                     m.apply(fn)
                 return self
             def state_dict(self):
-                # 简化: 只序列化 params
-                return {n: p.data for n, p in self.named_parameters()}
+                return {n: (p.data if hasattr(p, "data") else p) for n, p in self.named_parameters()}
             def load_state_dict(self, sd, strict=True):
                 for n, p in self.named_parameters():
                     if n in sd:
-                        p.data = sd[n].astype(p.data.dtype) if hasattr(sd[n], 'astype') else sd[n]
+                        arr = sd[n]
+                        if hasattr(arr, 'astype'):
+                            p.data = arr.astype(p.data.dtype)
+                        else:
+                            p.data = np.asarray(arr)
                 return self
             def to(self, *a):
                 return self
@@ -363,49 +485,66 @@ class FakeTorch:
         class Linear(Module):
             def __init__(self, in_f, out_f, bias=True):
                 super().__init__()
-                self.weight = FakeTorch.Tensor(np.random.randn(out_f, in_f) * 0.02)
-                self.bias = FakeTorch.Tensor(np.zeros(out_f)) if bias else None
+                w = np.random.randn(out_f, in_f) * 0.02
+                self.weight = FakeTorch.nn.Parameter(w)
+                if bias:
+                    self.bias = FakeTorch.nn.Parameter(np.zeros(out_f))
+                else:
+                    self.bias = None
                 self.in_features = in_f
                 self.out_features = out_f
             def forward(self, x):
-                return FakeTorch.Tensor(x.data @ self.weight.data.T + (self.bias.data if self.bias else 0))
+                w = self.weight.data
+                b = self.bias.data if self.bias is not None else 0
+                return FakeTorch.Tensor(x.data @ w.T + b)
 
         class Embedding(Module):
             def __init__(self, vocab, dim):
                 super().__init__()
-                self.weight = FakeTorch.Tensor(np.random.randn(vocab, dim) * 0.02)
+                self.weight = FakeTorch.nn.Parameter(np.random.randn(vocab, dim) * 0.02)
             def forward(self, ids):
-                # ids 可能是 float / int，统一转 int64
                 idx = ids.data.astype(np.int64) if ids.data.dtype.kind == 'f' else ids.data
                 return FakeTorch.Tensor(self.weight.data[idx])
 
         class Parameter:
+            """Parameter: data 必须是 ndarray, 不是 FakeTorch.Tensor.
+
+            关键: 构造时如果传入 FakeTorch.Tensor, 必须拆出 .data, 否则后续
+            `ndarray * Parameter` 会让 numpy 创建 object dtype 数组。
+            """
             def __init__(self, data):
+                if isinstance(data, FakeTorch.Tensor):
+                    data = data.data
                 self.data = data
             @property
             def numel(self):
                 return self.data.size
-            # 当 Parameter 出现在 Tensor 的运算中时, 转 Tensor 处理
+            @property
+            def shape(self):
+                return self.data.shape
+            @property
+            def dtype(self):
+                return self.data.dtype
             def __mul__(self, other):
+                if hasattr(other, 'data') and not isinstance(other, FakeTorch.Tensor):
+                    other = other.data
                 if isinstance(other, FakeTorch.Tensor):
                     other = other.data
                 return FakeTorch.Tensor(self.data * other)
             def __rmul__(self, other):
                 return self.__mul__(other)
             def __add__(self, other):
+                if hasattr(other, 'data') and not isinstance(other, FakeTorch.Tensor):
+                    other = other.data
                 if isinstance(other, FakeTorch.Tensor):
                     other = other.data
                 return FakeTorch.Tensor(self.data + other)
             def __radd__(self, other):
                 return self.__add__(other)
-            @property
-            def shape(self): return self.data.shape
-            @property
-            def dtype(self): return self.data.dtype
 
     class optim:
         class AdamW:
-            def __init__(self, lr=1e-3):
+            def __init__(self, params=None, lr=1e-3, **kw):
                 self.lr = lr
                 self.param_groups = [{"lr": lr}]
             def zero_grad(self, *a, **kw): pass
@@ -414,7 +553,7 @@ class FakeTorch:
             def load_state_dict(self, s): pass
 
         class Adam:
-            def __init__(self, lr=1e-3):
+            def __init__(self, params=None, lr=1e-3, **kw):
                 self.lr = lr
                 self.param_groups = [{"lr": lr}]
             def zero_grad(self): pass
@@ -439,41 +578,57 @@ class FakeTorch:
                         xs, ys = [], []
                         for j in bi:
                             x, y = self.ds[j]
-                            xs.append(x.data); ys.append(y.data)
+                            xs.append(x.data if hasattr(x, 'data') else x)
+                            ys.append(y.data if hasattr(y, 'data') else y)
                         yield FakeTorch.Tensor(np.stack(xs)), FakeTorch.Tensor(np.stack(ys))
                 def __len__(self):
                     return len(self.ds) // self.batch_size
 
+    @staticmethod
+    def finfo(dtype):
+        """torch.finfo(dtype).min — 返回最小值."""
+        if dtype in (FakeTorch.float32, np.float32):
+            return np.finfo(np.float32)
+        if dtype in (FakeTorch.float16, np.float16):
+            return np.finfo(np.float16)
+        return np.finfo(np.float32)
+
 
 def install_fake_torch():
     """把 fake torch 注入 sys.modules, 让 llm_train 跑通."""
-    # 完整的 torch.nn.functional stub
     class _F:
         @staticmethod
         def silu(x):
             if isinstance(x, FakeTorch.Tensor):
                 return FakeTorch.Tensor(x.data / (1.0 + np.exp(-x.data)))
             return x / (1.0 + np.exp(-x))
+
         @staticmethod
         def softmax(x, dim=-1):
             x = x.data if isinstance(x, FakeTorch.Tensor) else x
             e = np.exp(x - x.max(axis=dim, keepdims=True))
             return FakeTorch.Tensor(e / e.sum(axis=dim, keepdims=True))
+
         @staticmethod
         def relu(x):
             x = x.data if isinstance(x, FakeTorch.Tensor) else x
             return FakeTorch.Tensor(np.maximum(0, x))
+
         @staticmethod
         def gelu(x):
             x = x.data if isinstance(x, FakeTorch.Tensor) else x
             return FakeTorch.Tensor(x * 0.5 * (1 + np.tanh(np.sqrt(2/np.pi) * (x + 0.044715 * x**3))))
+
         @staticmethod
         def embedding(input, weight, padding_idx=None):
-            return FakeTorch.Tensor(weight.data[input.data])
+            i = input.data if isinstance(input, FakeTorch.Tensor) else np.asarray(input)
+            w = weight.data if isinstance(weight, FakeTorch.Tensor) else np.asarray(weight)
+            return FakeTorch.Tensor(w[i])
 
-    # 关键: torch.nn.functional 必须能被 `from torch.nn import functional` 找到
-    # 在真实 torch 中, torch.nn.functional 是 torch.nn.functional 的 module
-    # 我们把 FakeTorch.nn.functional = _F
+        @staticmethod
+        def cross_entropy(input, target, ignore_index=-100, reduction='mean'):
+            return input.cross_entropy(target, ignore_index=ignore_index)
+
     FakeTorch.nn.functional = _F
 
     sys.modules['torch'] = FakeTorch
@@ -502,7 +657,11 @@ class TestE2E(unittest.TestCase):
         cfg.hidden_size = 32
         cfg.num_layers = 2
         cfg.num_heads = 2
+        # 注意: 改 num_heads 后必须同步 num_kv_heads <= num_heads, 否则 GQA 会失败
+        cfg.num_kv_heads = 2
         cfg.intermediate_size = 64
+        # 字段修改后需要手动 revalidate (__post_init__ 只在 init 时跑一次)
+        cfg._validate()
 
         model = LlamaForCausalLM(cfg)
         # forward
@@ -516,7 +675,9 @@ class TestE2E(unittest.TestCase):
         from llm_train.model.llama import LlamaForCausalLM
 
         cfg = ModelConfig.tiny(vocab_size=50)
-        cfg.hidden_size = 32; cfg.num_layers = 2; cfg.num_heads = 2; cfg.intermediate_size = 64
+        cfg.hidden_size = 32; cfg.num_layers = 2; cfg.num_heads = 2
+        cfg.num_kv_heads = 2; cfg.intermediate_size = 64
+        cfg._validate()
 
         with tempfile.TemporaryDirectory() as tmp:
             model = LlamaForCausalLM(cfg)

@@ -35,6 +35,13 @@ class ModelConfig:
     initializer_range: float = 0.02
 
     def __post_init__(self):
+        self._validate()
+
+    def _validate(self) -> None:
+        """校验字段约束 — init 时和手动字段修改后都可以调。
+
+        失败抛 ValueError 附带上下文, 让错误立刻可见。
+        """
         # 头维度必须整除
         if self.hidden_size % self.num_heads != 0:
             raise ValueError(
@@ -49,6 +56,13 @@ class ModelConfig:
         # GQA: kv heads 默认等于 num_heads (MHA)
         if self.num_kv_heads is None:
             self.num_kv_heads = self.num_heads
+        # GQA 语义约束: kv heads 必须 <= q heads (MHA 是 num_kv_heads == num_heads 的特例)
+        # 反例会让 num_kv_groups = 0, attention 计算会广播失败
+        if self.num_kv_heads > self.num_heads:
+            raise ValueError(
+                f"num_kv_heads({self.num_kv_heads}) 不能大于 num_heads({self.num_heads}); "
+                f"GQA 要求 kv heads <= q heads (MHA 是 num_kv_heads == num_heads 的特例)"
+            )
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError(
                 f"num_heads({self.num_heads}) 必须能被 num_kv_heads({self.num_kv_heads}) 整除"

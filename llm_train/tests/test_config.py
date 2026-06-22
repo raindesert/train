@@ -53,6 +53,53 @@ class TestConfig(unittest.TestCase):
             if name in ("small", "medium", "large"):
                 self.assertGreaterEqual(cfg.num_heads, 8)
 
+    def test_kv_heads_gt_q_heads_raises(self):
+        """GQA 语义约束: num_kv_heads 不能大于 num_heads (MHA 是 num_kv_heads==num_heads 特例)。
+
+        反例会让 num_kv_groups = 0, attention 计算会广播失败。
+        """
+        with self.assertRaises(ValueError) as ctx:
+            ModelConfig(vocab_size=50, hidden_size=32, num_layers=2,
+                        num_heads=2, num_kv_heads=4)
+        msg = str(ctx.exception)
+        self.assertIn("num_kv_heads", msg)
+        self.assertIn("不能大于", msg)
+
+    def test_kv_heads_eq_q_heads_ok(self):
+        """MHA 风格 (num_kv_heads == num_heads) 必须合法."""
+        c = ModelConfig(vocab_size=50, hidden_size=32, num_layers=2,
+                        num_heads=2, num_kv_heads=2)
+        self.assertEqual(c.num_kv_groups, 1)
+
+    def test_kv_heads_div_q_heads_ok(self):
+        """GQA 风格 (num_heads % num_kv_heads == 0) 必须合法."""
+        c = ModelConfig(vocab_size=50, hidden_size=64, num_layers=2,
+                        num_heads=4, num_kv_heads=2)
+        self.assertEqual(c.num_kv_groups, 2)
+
+    def test_kv_heads_not_div_q_heads_raises(self):
+        """GQA 不整除 (num_heads % num_kv_heads != 0) 必须抛错."""
+        with self.assertRaises(ValueError):
+            ModelConfig(vocab_size=50, hidden_size=32, num_layers=2,
+                        num_heads=4, num_kv_heads=3)
+
+    def test_validate_after_field_change(self):
+        """字段修改后 _validate() 必须重跑 (dataclass __post_init__ 只在 init 跑一次).
+
+        这是 test_e2e 暴露的洞: 改 num_heads 不调 _validate 不会抛错,
+        构造模型时 attention 广播失败。需要手动 revalidate。
+        """
+        c = ModelConfig.tiny(vocab_size=50)  # num_heads=4, num_kv_heads=4
+        # 修改 num_heads 不触发 __post_init__ — 当前不会抛
+        c.num_heads = 2  # num_kv_heads 还是 4
+        # 手动 revalidate — 必须抛
+        with self.assertRaises(ValueError):
+            c._validate()
+        # 修配置后 _validate 应该过
+        c.num_kv_heads = 2
+        c._validate()  # 不抛
+        self.assertEqual(c.num_kv_groups, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

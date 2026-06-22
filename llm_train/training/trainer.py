@@ -12,8 +12,10 @@ import os
 import time
 import json
 import math
+import warnings
+import dataclasses
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Dict, List
+from typing import Callable, Optional, Dict, List, Tuple, Union, get_type_hints
 
 import torch
 from torch import nn
@@ -54,28 +56,98 @@ class TrainerConfig:
 
     @classmethod
     def from_dict(cls, d: dict) -> "TrainerConfig":
-        """从 dict 构造, 容错忽略未知字段 + 修正 YAML 常见错误.
+        """从 dict 构造, 容错 + 报告问题字段。
 
-        修正:
-          * 移除不在 dataclass 中的字段
-          * 类型转换失败的字段保留 dataclass 默认值
+        行为:
+          * 未知字段: 不抛错, 但 ``warnings.warn`` 列出全部被忽略的字段和值
+            (YAML typo 容易让训练静默用默认值, 此举让问题可见)
+          * 类型校验失败: ``warnings.warn`` + 退回 dataclass 默认值
+            (避免单字段写错让整个 config 起不来)
+          * 容器类型 (Dict/List) 不做校验, YAML 复杂结构原样透传
+          * ``None`` 对 ``Optional[T]`` 类型始终接受
+
+        不破坏旧行为: 旧调用方不依赖被忽略字段, 仍然得到合法 TrainerConfig.
         """
-        import dataclasses
-        valid = {f.name for f in dataclasses.fields(cls)}
+        valid_fields = {f.name: f for f in dataclasses.fields(cls)}
+        try:
+            hints = get_type_hints(cls)
+        except Exception:
+            hints = {f.name: f.type for f in dataclasses.fields(cls)}
+
+        unknown_keys = {}      # k -> v, 用于一次 warn
+        type_failures = []     # (k, v, err), 用于一次 warn
+
         clean = {}
         for k, v in d.items():
-            if k not in valid:
+            if k not in valid_fields:
+                unknown_keys[k] = v
                 continue
-            # 类型校验
-            f = next(f for f in dataclasses.fields(cls) if f.name == k)
-            try:
-                if f.type is not None and v is not None:
-                    # 简单类型转换 — 跳过无法转换的让 dataclass 报
-                    pass
+
+            # 类型校验 — Optional[T] 接受 None
+            target_t = hints.get(k)
+            if target_t is None or v is None:
                 clean[k] = v
-            except Exception:
                 continue
+
+            # 容器类型不做严格校验 (YAML 复杂结构由使用处兜底)
+            origin = getattr(target_t, "__origin__", None)
+            if origin in (dict, Dict, list, List, tuple, Tuple):
+                clean[k] = v
+                continue
+
+            # 简单类型: int / float / bool / str
+            py = _unwrap_optional(target_t)
+            if py in (int, float, str, bool):
+                try:
+                    if py is bool:
+                        # YAML 'true'/'false' -> bool; 0/1 也接受
+                        if isinstance(v, bool):
+                            clean[k] = v
+                        elif isinstance(v, (int, float)):
+                            clean[k] = bool(v)
+                        elif isinstance(v, str):
+                            clean[k] = v.strip().lower() in ("true", "1", "yes", "on")
+                        else:
+                            raise TypeError(f"bool expects scalar, got {type(v).__name__}")
+                    elif py is int:
+                        clean[k] = int(v) if not isinstance(v, bool) else int(v)
+                    elif py is float:
+                        clean[k] = float(v)
+                    elif py is str:
+                        clean[k] = str(v)
+                except Exception as e:
+                    type_failures.append((k, v, str(e)))
+                continue
+
+            # 其它类型 (e.g. 自定义 dataclass) 不校验, 原样透传
+            clean[k] = v
+
+        if unknown_keys:
+            pairs = ", ".join(f"{k}={v!r}" for k, v in unknown_keys.items())
+            warnings.warn(
+                f"TrainerConfig.from_dict ignored {len(unknown_keys)} unknown "
+                f"field(s) (likely YAML typo): {pairs}",
+                stacklevel=2,
+            )
+        if type_failures:
+            parts = ", ".join(f"{k}={v!r} ({err})" for k, v, err in type_failures)
+            warnings.warn(
+                f"TrainerConfig.from_dict: {len(type_failures)} field(s) had "
+                f"bad type, fell back to default: {parts}",
+                stacklevel=2,
+            )
+
         return cls(**clean)
+
+
+def _unwrap_optional(tp):
+    """Optional[X] -> X, 其余原样返回."""
+    origin = getattr(tp, "__origin__", None)
+    if origin is Union:
+        args = [a for a in tp.__args__ if a is not type(None)]
+        if len(args) == 1:
+            return _unwrap_optional(args[0])
+    return tp
 
 
 class Trainer:

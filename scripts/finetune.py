@@ -30,7 +30,8 @@ def main():
 
     model_cfg = ModelConfig.from_dict(cfg["model"])
     model = LlamaForCausalLM(model_cfg)
-    tcfg = TrainerConfig(**cfg["training"], grad_accum=cfg["data"].get("grad_accum", 1))
+    tcfg = TrainerConfig.from_dict(cfg["training"])
+    tcfg.grad_accum = cfg["data"].get("grad_accum", 1)
     if args.resume:
         tcfg.resume = args.resume
     elif cfg["training"].get("resume"):

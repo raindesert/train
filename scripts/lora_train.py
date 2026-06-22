@@ -49,7 +49,8 @@ def main():
                                       seq_len=cfg["data"]["seq_len"],
                                       batch_size=cfg["data"]["batch_size"])
 
-    tcfg = TrainerConfig(**cfg["training"], grad_accum=cfg["data"].get("grad_accum", 1))
+    tcfg = TrainerConfig.from_dict(cfg["training"])
+    tcfg.grad_accum = cfg["data"].get("grad_accum", 1)
     trainer = Trainer(model, loader, None, tcfg)
     trainer.train()
 

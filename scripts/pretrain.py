@@ -77,7 +77,8 @@ def main():
     print(f"model params: {model.num_parameters()/1e6:.1f}M")
 
     # 4) trainer
-    tcfg = TrainerConfig(**cfg["training"], grad_accum=cfg["data"].get("grad_accum", 1))
+    tcfg = TrainerConfig.from_dict(cfg["training"])
+    tcfg.grad_accum = cfg["data"].get("grad_accum", 1)
     trainer = Trainer(model, train_loader, eval_loader, tcfg)
     trainer.train()
 

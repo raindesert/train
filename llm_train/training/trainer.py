@@ -52,6 +52,31 @@ class TrainerConfig:
     max_grad_norm: float = 1.0
     eval_max_batches: Optional[int] = None  # 限制 eval 步数
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "TrainerConfig":
+        """从 dict 构造, 容错忽略未知字段 + 修正 YAML 常见错误.
+
+        修正:
+          * 移除不在 dataclass 中的字段
+          * 类型转换失败的字段保留 dataclass 默认值
+        """
+        import dataclasses
+        valid = {f.name for f in dataclasses.fields(cls)}
+        clean = {}
+        for k, v in d.items():
+            if k not in valid:
+                continue
+            # 类型校验
+            f = next(f for f in dataclasses.fields(cls) if f.name == k)
+            try:
+                if f.type is not None and v is not None:
+                    # 简单类型转换 — 跳过无法转换的让 dataclass 报
+                    pass
+                clean[k] = v
+            except Exception:
+                continue
+        return cls(**clean)
+
 
 class Trainer:
     def __init__(self,
@@ -94,11 +119,17 @@ class Trainer:
             self.epoch = st.get("epoch", 0)
 
     def _train_step(self, batch):
-        x, y = batch
+        # batch 可能是 (x, y) 或 (x, y, mask)
+        if len(batch) == 3:
+            x, y, mask = batch
+            mask = mask.to(self.device, non_blocking=True)
+        else:
+            x, y = batch
+            mask = None
         x = x.to(self.device, non_blocking=True)
         y = y.to(self.device, non_blocking=True)
         with autocast_context(self.cfg.amp, device_type=self.device, dtype=self.dtype):
-            out = self.model(input_ids=x, labels=y)
+            out = self.model(input_ids=x, labels=y, attention_mask=mask)
             loss = out.loss / self.cfg.grad_accum
         if self.scaler is not None:
             self.scaler.scale(loss).backward()

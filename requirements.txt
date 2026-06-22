@@ -1,0 +1,9 @@
+torch>=2.0
+tokenizers>=0.13
+datasets>=2.10
+numpy>=1.24
+tqdm>=4.65
+requests>=2.28
+pyyaml>=6.0
+# peft>=0.5     # LoRA 可选
+# bitsandbytes  # QLoRA 可选

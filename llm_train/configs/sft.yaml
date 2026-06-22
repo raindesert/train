@@ -1,0 +1,30 @@
+# 全参微调 (SFT)
+model:
+  vocab_size: 32000
+  hidden_size: 512
+  num_layers: 8
+  num_heads: 8
+  max_seq_len: 1024
+
+data:
+  seq_len: 1024
+  batch_size: 16
+  grad_accum: 1
+  dataset: sft-mix
+
+tokenizer:
+  vocab_size: 32000
+
+training:
+  max_steps: 3000
+  warmup_steps: 100
+  lr: 1e-5
+  min_lr_ratio: 0.1
+  schedule: cosine
+  weight_decay: 0.0
+  amp: true
+  log_every: 20
+  eval_every: 200
+  save_every: 500
+  out_dir: ./checkpoints/sft
+  resume: ./checkpoints/small/final.pt

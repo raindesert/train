@@ -1,0 +1,36 @@
+# LoRA 微调
+model:
+  vocab_size: 32000
+  hidden_size: 512
+  num_layers: 8
+  num_heads: 8
+  max_seq_len: 1024
+
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - v_proj
+
+data:
+  seq_len: 1024
+  batch_size: 16
+  dataset: sft-mix
+
+tokenizer:
+  vocab_size: 32000
+
+training:
+  max_steps: 2000
+  warmup_steps: 50
+  lr: 1e-4
+  schedule: cosine
+  weight_decay: 0.0
+  amp: true
+  log_every: 20
+  eval_every: 200
+  save_every: 500
+  out_dir: ./checkpoints/lora
+  resume: ./checkpoints/small/final.pt

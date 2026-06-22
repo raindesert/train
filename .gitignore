@@ -1,0 +1,10 @@
+checkpoints/
+data/raw/
+data/processed/
+logs/
+*.pt
+*.bin
+*.safetensors
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

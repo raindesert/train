@@ -36,7 +36,7 @@ pip install -r requirements.txt
 python -m llm_train.data.download --dataset tinyshakespeare
 
 # 3. 训练分词器
-python scripts/train_tokenizer.py --input data/raw/tinyshakespeare.txt --output checkpoints/tokenizer --vocab_size 8000
+python scripts/train_tokenizer.py --input data/raw/pretrain_t2t_mini_sample.jsonl --output checkpoints/tokenizer --vocab_size 6400
 
 # 4. 预训练小模型 (CPU/MPS/CUDA 都行)
 python scripts/pretrain.py --config llm_train/configs/tiny.yaml

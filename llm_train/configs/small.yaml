@@ -11,13 +11,13 @@ data:
   seq_len: 1024
   batch_size: 32
   grad_accum: 4
-  dataset: tinyshakespeare
+  dataset: pretrain_t2t_mini
 
 tokenizer:
   vocab_size: 32000
   min_frequency: 3
   input_files:
-    - data/raw/tinyshakespeare.txt
+    - data/raw/pretrain_t2t_mini.jsonl
 
 training:
   max_steps: 10000

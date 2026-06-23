@@ -25,17 +25,42 @@ def _token_dtype(vocab_size: int):
     return np.uint32
 
 
-def pack_bin(out_path: str, tokens: Iterable[int], vocab_size: int):
-    """把 1D token 流写进 .bin, 可直接 mmap."""
+def pack_bin(out_path: str, tokens: Iterable[int], vocab_size: int, buffer_size: int = 500000):
+    """把 1D token 流写进 .bin, 流式写入避免 OOM.
+
+    写文件头时先写入 0, 写完后 seek 回去更新 token_count。
+    buffer_size: 每次写入的 token 块大小, 控制内存峰值。
+    """
     dtype = _token_dtype(vocab_size)
-    arr = np.fromiter(tokens, dtype=dtype)
+
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "wb") as f:
         f.write(MAGIC)
-        f.write(struct.pack("<III", VERSION, vocab_size, 0))         # padding -> 12B
-        f.write(struct.pack("<Q", len(arr)))                          # token_count -> 20B
-        f.write(arr.tobytes(order="C"))
-    print("packed %d tokens (%.1fMB) -> %s" % (len(arr), arr.nbytes/1e6, out_path))
+        f.write(struct.pack("<III", VERSION, vocab_size, 0))
+        # 先占位 token_count (8 bytes)
+        count_pos = f.tell()
+        f.write(struct.pack("<Q", 0))
+
+        # 流式分块写入
+        buf = np.zeros(buffer_size, dtype=dtype)
+        buf_idx = 0
+        token_count = 0
+        for tok in tokens:
+            buf[buf_idx] = tok
+            buf_idx += 1
+            token_count += 1
+            if buf_idx >= buffer_size:
+                f.write(buf.tobytes(order="C"))
+                buf_idx = 0
+        if buf_idx > 0:
+            f.write(buf[:buf_idx].tobytes(order="C"))
+
+        # seek 回去写正确的 token_count
+        f.seek(count_pos)
+        f.write(struct.pack("<Q", token_count))
+
+    size_mb = token_count * np.dtype(dtype).itemsize / 1e6
+    print("packed %d tokens (%.1fMB) -> %s" % (token_count, size_mb, out_path))
     return out_path
 
 

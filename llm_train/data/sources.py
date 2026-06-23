@@ -129,45 +129,28 @@ def build_mixed_loader(sources, weights, tokenizer,
     """
     from .packing import pack_bin
     from .dataloader import TokenDataset, DataLoader
+    import itertools
 
     bos_id = tokenizer.bos_id if bos_token else None
     eos_id = tokenizer.eos_id if eos_token else None
 
-    rng = random.Random(0)
     weights = list(weights)
     norm = sum(weights)
     weights = [w / norm for w in weights]
 
-    bins = []
-    for src, w in zip(sources, weights):
-        docs = list(src)
-        if w < 1.0 and len(docs) > 1:
-            n = max(1, int(len(docs) * w))
-            rng.shuffle(docs)
-            docs = docs[:n]
-        ids = []
-        for d in docs:
-            enc = tokenizer.encode(d, add_bos=(bos_id is not None), add_eos=(eos_id is not None))
-            ids.extend(enc)
-        bins.append(ids)
-        print("  source %s: %d docs, %d tokens" % (src.__class__.__name__, len(docs), len(ids)))
-
-    all_tokens = []
-    rng2 = random.Random(1)
-    while bins:
-        idx = rng2.randrange(len(bins))
-        if not bins[idx]:
-            bins.pop(idx)
-            continue
-        chunk = min(2048, len(bins[idx]))
-        all_tokens.extend(bins[idx][:chunk])
-        del bins[idx][:chunk]
+    def token_stream():
+        """流式 yield token, 不在内存中累积全部 token 列表."""
+        for src in sources:
+            for doc in src:
+                enc = tokenizer.encode(doc, add_bos=(bos_id is not None), add_eos=(eos_id is not None))
+                yield from enc
 
     out_dir = "./data/processed"
     os.makedirs(out_dir, exist_ok=True)
-    # 用 token 总数命名, 避免重复迭代已耗尽的 source
-    bin_path = "%s/mixed_%d.bin" % (out_dir, len(all_tokens))
-    pack_bin(bin_path, all_tokens, vocab_size=tokenizer.vocab_size)
+    bin_path = "%s/mixed_stream.bin" % out_dir
+
+    # 流式写入, 不在内存中累积全部 tokens
+    pack_bin(bin_path, token_stream(), vocab_size=tokenizer.vocab_size, buffer_size=500000)
 
     ds = TokenDataset(bin_path, seq_len=seq_len, vocab_size=tokenizer.vocab_size,
                       bos_id=bos_id, eos_id=eos_id)

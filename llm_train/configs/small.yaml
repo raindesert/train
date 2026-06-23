@@ -11,7 +11,7 @@ data:
   seq_len: 1024
   batch_size: 32
   grad_accum: 4
-  dataset: pretrain_t2t_mini
+  bin_path: data/processed/pretrain_t2t_mini.bin 
 
 tokenizer:
   vocab_size: 32000

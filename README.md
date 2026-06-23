@@ -26,37 +26,157 @@ llm_train/
 配置:      `pyyaml`
 LoRA:      `peft`(可选)
 
-## 快速开始
+## 安装
 
 ```bash
-# 1. 安装
 pip install -r requirements.txt
-
-# 2. 下载数据 (训练时按需下载到 ./data/raw/)
-python -m llm_train.data.download --dataset tinyshakespeare
-
-# 3. 训练分词器
-python scripts/train_tokenizer.py --input data/raw/pretrain_t2t_mini_sample.jsonl --output checkpoints/tokenizer --vocab_size 6400
-
-# 4. 预训练小模型 (CPU/MPS/CUDA 都行)
-python scripts/pretrain.py --config llm_train/configs/tiny.yaml
-
-# 5. 全参微调
-python scripts/finetune.py --config llm_train/configs/sft.yaml
-
-# 6. LoRA 微调
-python scripts/lora_train.py --config llm_train/configs/lora.yaml
-
-# 7. 推理
-python scripts/infer.py --checkpoint checkpoints/tiny/best.pt --tokenizer checkpoints/tokenizer --prompt "Once upon a time"
 ```
+
+## 数据格式支持
+
+| 格式 | 文件类型 | 用途 |
+|------|----------|------|
+| 纯文本 | `.txt` | 预训练 |
+| 简单 JSONL | `{"text": "..."}` | 预训练 |
+| ChatML | `{"conversations": [...]}` | 微调 |
+| HuggingFace Dataset | streaming | 预训练/微调 |
+
+ChatML 格式示例：
+```json
+{"conversations": [
+  {"role": "user", "content": "画一张春天的海报"},
+  {"role": "assistant", "content": "我理解你的需求...", "tool_calls": "..."}
+]}
+```
+
+## 完整流程
+
+### 第一步：准备数据
+
+将数据放到 `data/raw/` 目录下。推荐用 jsonl 格式。
+
+### 第二步：处理数据（大数据必做）
+
+如果数据文件超过 500MB，需要分片处理避免 OOM：
+
+```bash
+python scripts/split_tokenize.py \
+    --input data/raw/your_data.jsonl \
+    --output data/processed/your_data \
+    --lines_per_chunk 100000 \
+    --vocab_size 20000 \
+    --train_tokenizer
+```
+
+参数说明：
+- `--lines_per_chunk`: 每个分片的行数（默认 10 万行）
+- `--vocab_size`: 词表大小（默认 32000）
+- `--train_tokenizer`: 是否训练新 tokenizer（首次需要）
+- `--tokenizer_limit`: 训练 tokenizer 的最多行数（默认 50 万，避免 OOM）
+
+处理后得到 `data/processed/your_data.bin`，可直接用于训练。
+
+### 第三步：训练分词器（小数据）
+
+如果数据量小于 500MB，可以直接训练 tokenizer：
+
+```bash
+python scripts/train_tokenizer.py \
+    --input data/raw/your_data.jsonl \
+    --output checkpoints/tokenizer \
+    --vocab_size 20000 \
+    --limit 500000
+```
+
+`--limit` 限制训练行数，避免 OOM。词表不需要全量数据。
+
+### 第四步：预训练
+
+修改配置文件 `llm_train/configs/your_model.yaml`，指定数据路径和 tokenizer：
+
+```yaml
+model:
+  vocab_size: 20000
+  hidden_size: 512
+  num_layers: 8
+  num_heads: 8
+  max_seq_len: 1024
+
+data:
+  seq_len: 1024
+  batch_size: 16
+  grad_accum: 4
+
+tokenizer:
+  path: checkpoints/tokenizer   # 直接加载已训练的 tokenizer
+  vocab_size: 20000
+
+training:
+  max_steps: 10000
+  warmup_steps: 500
+  lr: 3e-4
+  amp: true
+  amp_dtype: bf16
+  log_every: 50
+  eval_every: 500
+  eval_max_batches: 5
+  save_every: 1000
+  out_dir: ./checkpoints/your_model
+```
+
+启动训练（自动检测 GPU/CPU）：
+
+```bash
+python scripts/pretrain.py --config llm_train/configs/your_model.yaml
+```
+
+训练会自动从 `tokenizer.path` 加载 tokenizer。如果路径不存在，会用 `input_files` 训练一个。
+
+断点续训：
+```yaml
+training:
+  resume: ./checkpoints/your_model/latest.pt
+```
+
+### 第五步：微调
+
+准备微调数据（ChatML 格式），然后：
+
+```bash
+python scripts/finetune.py \
+    --config llm_train/configs/sft.yaml \
+    --data data/raw/sft_data.jsonl \
+    --tokenizer checkpoints/tokenizer
+```
+
+会自动检测 `conversations` 字段并使用 ChatML 格式。
+
+### 第六步：LoRA 微调
+
+```bash
+python scripts/lora_train.py \
+    --config llm_train/configs/lora.yaml \
+    --data data/raw/sft_data.jsonl \
+    --tokenizer checkpoints/tokenizer
+```
+
+### 第七步：推理
+
+```bash
+python scripts/infer.py \
+    --checkpoint checkpoints/your_model/best.pt \
+    --tokenizer checkpoints/tokenizer \
+    --prompt "Once upon a time"
+```
+
+支持参数：`--max_new_tokens`, `--temperature`, `--top_k`, `--top_p`, `--no_sample`
 
 ## 模型规模
 
 | 配置      | 参数量   | 适用                |
 |-----------|----------|---------------------|
 | tiny.yaml | ~15M     | CPU/MPS 调试/教学   |
-| small.yaml| ~125M    | 单卡 12G+           |
+| small.yaml| ~60M     | 单卡 12G+           |
 | medium.yaml| ~350M   | 单卡 24G / 多卡     |
 | large.yaml| ~1.3B    | 多卡/DeepSpeed      |
 

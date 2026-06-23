@@ -64,6 +64,61 @@ def pack_bin(out_path: str, tokens: Iterable[int], vocab_size: int, buffer_size:
     return out_path
 
 
+def merge_bins(bin_paths: list, out_path: str, vocab_size: int):
+    """合并多个 .bin 文件（跳过 header，只拼接 token 流）.
+
+    用于大文件分片 tokenize 后合并。
+    """
+    dtype = _token_dtype(vocab_size)
+    dtype_size = np.dtype(dtype).itemsize
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    tmp_path = out_path + ".tmp"
+
+    # 先写最终 header（token_count 待填）
+    with open(tmp_path, "wb") as f:
+        f.write(MAGIC)
+        f.write(struct.pack("<III", VERSION, vocab_size, 0))
+        count_pos = f.tell()
+        f.write(struct.pack("<Q", 0))  # placeholder
+
+    total_count = 0
+    buf = np.zeros(500000, dtype=dtype)
+    buf_idx = 0
+
+    for bp in bin_paths:
+        with open(bp, "rb") as cf:
+            cf.seek(HEADER_SIZE)  # 跳过 header
+            while True:
+                chunk = cf.read(500000 * dtype_size)
+                if not chunk:
+                    break
+                arr = np.frombuffer(chunk, dtype=dtype)
+                for tok in arr:
+                    buf[buf_idx] = tok
+                    buf_idx += 1
+                    total_count += 1
+                    if buf_idx >= 500000:
+                        with open(tmp_path, "ab") as f:
+                            f.write(buf.tobytes(order="C"))
+                        buf_idx = 0
+        os.unlink(bp)
+
+    if buf_idx > 0:
+        with open(tmp_path, "ab") as f:
+            f.write(buf[:buf_idx].tobytes(order="C"))
+
+    # 回填 token_count
+    with open(tmp_path, "r+b") as f:
+        f.seek(count_pos)
+        f.write(struct.pack("<Q", total_count))
+
+    os.replace(tmp_path, out_path)
+    size_mb = total_count * dtype_size / 1e6
+    print("merged %d tokens (%.1fMB) -> %s" % (total_count, size_mb, out_path))
+    return out_path
+
+
 def load_bin(path: str) -> np.ndarray:
     """mmap 加载 .bin, 返回 1D numpy array."""
     with open(path, "rb") as f:

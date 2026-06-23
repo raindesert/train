@@ -20,7 +20,8 @@ def main():
     ap.add_argument("--tokenizer", default="checkpoints/tokenizer")
     ap.add_argument("--resume", default=None)
     args = ap.parse_args()
-    cfg = yaml.safe_load(open(args.config))
+    with open(args.config, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
     tk = get_tokenizer(args.tokenizer, kind="bpe")
     cfg["model"]["vocab_size"] = tk.vocab_size
 

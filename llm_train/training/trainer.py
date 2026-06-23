@@ -170,18 +170,23 @@ class Trainer:
         self.optimizer = build_optimizer(model, lr=self.cfg.lr,
                                          weight_decay=self.cfg.weight_decay,
                                          optimizer=self.cfg.optimizer)
+        # scheduler 按 optimizer step 计数, 需要除以 grad_accum
+        optimizer_total = max(1, self.cfg.max_steps // max(1, self.cfg.grad_accum))
+        optimizer_warmup = (self.cfg.warmup_steps // max(1, self.cfg.grad_accum)
+                            if self.cfg.warmup_steps > 0 else 0)
         self.scheduler = build_scheduler(self.optimizer,
-                                         total_steps=self.cfg.max_steps,
-                                         warmup_steps=self.cfg.warmup_steps,
+                                         total_steps=optimizer_total,
+                                         warmup_steps=optimizer_warmup,
                                          min_lr_ratio=self.cfg.min_lr_ratio,
                                          schedule=self.cfg.schedule)
-        self.scaler = make_grad_scaler(self.cfg.amp, self.device)
+        self.scaler = make_grad_scaler(self.cfg.amp, self.device, self.dtype)
 
         # 状态
         self.step = 0
         self.epoch = 0
         self.history: List[Dict] = []
         self.best_metric = float("inf")
+        self._last_batch_tokens = 0
 
         os.makedirs(self.cfg.out_dir, exist_ok=True)
         if self.cfg.resume:
@@ -207,6 +212,7 @@ class Trainer:
             self.scaler.scale(loss).backward()
         else:
             loss.backward()
+        self._last_batch_tokens = x.size(0) * x.size(1)
         return loss.item() * self.cfg.grad_accum
 
     def train(self):
@@ -228,8 +234,10 @@ class Trainer:
                 if (self.step + 1) % self.cfg.grad_accum == 0:
                     if self.scaler is not None:
                         self.scaler.unscale_(self.optimizer)
-                    if self.cfg.max_grad_norm > 0:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.max_grad_norm)
+                    # grad_clip 是 YAML 使用的字段, max_grad_norm 兼容旧配置
+                    clip = self.cfg.grad_clip if self.cfg.grad_clip != 1.0 else self.cfg.max_grad_norm
+                    if clip > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip)
                     if self.scaler is not None:
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
@@ -244,7 +252,7 @@ class Trainer:
                 if self.step % self.cfg.log_every == 0:
                     avg = sum(losses[-self.cfg.log_every:]) / max(1, len(losses[-self.cfg.log_every:]))
                     dt = time.time() - t0
-                    tps = self.step * (x.size(0) * x.size(1)) / max(1, dt)
+                    tps = self.step * self._last_batch_tokens / max(1, dt)
                     log.info(
                         f"step {self.step}/{self.cfg.max_steps} "
                         f"loss={avg:.4f} lr={self.scheduler.get_last_lr()[0]:.2e} "
@@ -289,10 +297,16 @@ class Trainer:
         for i, batch in enumerate(self.eval_loader):
             if i >= max_b:
                 break
-            x, y = batch
-            x = x.to(self.device); y = y.to(self.device)
+            if len(batch) == 3:
+                x, y, mask = batch
+                mask = mask.to(self.device)
+            else:
+                x, y = batch
+                mask = None
+            x = x.to(self.device, non_blocking=True)
+            y = y.to(self.device, non_blocking=True)
             with autocast_context(self.cfg.amp, device_type=self.device, dtype=self.dtype):
-                out = self.model(input_ids=x, labels=y)
+                out = self.model(input_ids=x, labels=y, attention_mask=mask)
             total += out.loss.item()
             count += 1
         avg = total / max(1, count)

@@ -19,7 +19,7 @@ from llm_train.training import Trainer, TrainerConfig
 
 
 def load_cfg(p):
-    with open(p) as f:
+    with open(p, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 

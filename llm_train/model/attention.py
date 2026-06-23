@@ -80,8 +80,11 @@ class Attention(nn.Module):
         k = self.k_proj(x).view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-        # 应用 RoPE
-        cos, sin = self.rotary(x, T)
+        # 计算位置偏移 (KV cache 推理时从已有长度开始)
+        offset = kv_cache.num_items() if kv_cache is not None else 0
+
+        # 应用 RoPE (带位置偏移)
+        cos, sin = self.rotary(x, T, offset=offset)
         q, k = apply_rotary_emb(q, k, cos, sin)
 
         # KV cache (推理时)
@@ -93,14 +96,24 @@ class Attention(nn.Module):
             k = k.repeat_interleave(self.num_kv_groups, dim=1)
             v = v.repeat_interleave(self.num_kv_groups, dim=1)
 
-        # 构造 attn_mask (B, T_q, T_k) — True/1 表示可见
+        # 构造 attn_mask
         # 训练时 T_q == T_k, 用 is_causal=True 让 SDPA 内部做 causal mask
         # 推理增量时 T_q=1, 历史 T_k 已知, mask 仅用于 attention_mask
+        # 当同时需要 causal + padding mask 时, 手动合并为单个 additive mask
         attn_mask = None
+        use_is_causal = is_causal
         if attention_mask is not None:
-            # (B, T_k) -> (B, 1, 1, T_k)
-            attn_mask = attention_mask[:, None, None, :].to(q.dtype)
-            attn_mask = (1.0 - attn_mask) * torch.finfo(q.dtype).min
+            # (B, T_k) -> (B, 1, 1, T_k) additive mask: 0=可见, -inf=不可见
+            pad_mask = attention_mask[:, None, None, :].to(q.dtype)
+            attn_mask = (1.0 - pad_mask) * torch.finfo(q.dtype).min
+            if is_causal:
+                # 合并 causal + padding: 手动构造下三角 additive mask
+                T_k = k.shape[2]
+                causal = torch.ones(T, T_k, device=q.device, dtype=q.dtype).tril()
+                causal_additive = (1.0 - causal) * torch.finfo(q.dtype).min
+                # (B, 1, 1, T_k) + (1, 1, T, T_k) -> (B, 1, T, T_k)
+                attn_mask = attn_mask + causal_additive[None, None, :, :]
+                use_is_causal = False  # 已手动做 causal, 不再让 SDPA 做
 
         # PyTorch 2.0+: SDPA 自动选择 flash / mem-efficient / math 实现
         try:
@@ -108,13 +121,13 @@ class Attention(nn.Module):
                 q, k, v,
                 attn_mask=attn_mask,
                 dropout_p=self.dropout_p if self.training else 0.0,
-                is_causal=is_causal and attn_mask is None,
+                is_causal=use_is_causal and attn_mask is None,
             )
         except Exception:
             # fallback: 手写实现
             scale = 1.0 / math.sqrt(self.head_dim)
             scores = (q @ k.transpose(-2, -1)) * scale  # (B, H, T, T_k)
-            if is_causal and attn_mask is None:
+            if use_is_causal and attn_mask is None:
                 mask = torch.ones(T, k.shape[2], device=q.device, dtype=torch.bool).tril()
                 scores = scores.masked_fill(~mask, float("-inf"))
             if attn_mask is not None:

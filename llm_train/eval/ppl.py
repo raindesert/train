@@ -19,9 +19,14 @@ def compute_perplexity(model, dataset, device: str = "auto", batch_size: int = 4
 
     loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, drop_last=False)
     total_loss, total_tokens = 0.0, 0
-    for i, (x, y) in enumerate(loader):
+    for i, batch in enumerate(loader):
         if max_batches and i >= max_batches:
             break
+        # TokenDataset 返回 (x, y, mask) 三元组
+        if isinstance(batch, (tuple, list)) and len(batch) == 3:
+            x, y, _ = batch
+        else:
+            x, y = batch
         x = x.to(device); y = y.to(device)
         with autocast_context(amp, device_type=device, dtype=dtype):
             out = model(input_ids=x, labels=y)

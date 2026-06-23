@@ -18,8 +18,11 @@ def autocast_context(enabled: bool, device_type: str = "cuda", dtype=None):
         yield dtype
 
 
-def make_grad_scaler(enabled: bool, device_type: str = "cuda"):
+def make_grad_scaler(enabled: bool, device_type: str = "cuda", dtype=None):
     """GradScaler — 仅 fp16 需要, bf16 不需要 (无动态范围损失)."""
     if not enabled or device_type != "cuda":
+        return None
+    # bf16 不需要 GradScaler (指数范围与 fp32 相同)
+    if dtype is not None and dtype != torch.float16:
         return None
     return torch.amp.GradScaler("cuda")

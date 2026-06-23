@@ -21,7 +21,8 @@ class TestModel(unittest.TestCase):
     def test_forward_backward(self):
         cfg = ModelConfig.tiny(vocab_size=100)
         cfg.hidden_size = 32; cfg.num_layers = 2; cfg.num_heads = 2
-        cfg.intermediate_size = 64
+        cfg.num_kv_heads = 2; cfg.intermediate_size = 64
+        cfg._validate()
         m = LlamaForCausalLM(cfg)
         x = torch.randint(0, 100, (2, 8))
         y = x.clone()
@@ -45,6 +46,7 @@ class TestModel(unittest.TestCase):
     def test_generate(self):
         cfg = ModelConfig.tiny(vocab_size=100)
         cfg.hidden_size = 32; cfg.num_layers = 2; cfg.num_heads = 2
+        cfg.num_kv_heads = 2; cfg._validate()
         m = LlamaForCausalLM(cfg)
         m.eval()
         x = torch.randint(0, 100, (1, 5))
@@ -63,7 +65,8 @@ class TestModel(unittest.TestCase):
         from llm_train.model.config import ModelConfig
         cfg = ModelConfig.tiny(vocab_size=50)
         cfg.hidden_size = 32; cfg.num_layers = 1; cfg.num_heads = 2
-        cfg.intermediate_size = 64
+        cfg.num_kv_heads = 2; cfg.intermediate_size = 64
+        cfg._validate()
         m = LlamaForCausalLM(cfg)
         m.eval()
         x = torch.randint(0, 50, (1, 6))

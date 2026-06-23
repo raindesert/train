@@ -13,7 +13,7 @@ llm_train/
 ├── lora/          # LoRA / QLoRA
 ├── inference/     # KV cache + 文本生成
 ├── eval/          # 困惑度评估
-├── configs/       # YAML 配置 (小/中/大模型)
+├── configs/       # YAML 配置 (小/中/大模型) — 实际在 llm_train/configs/
 ├── scripts/       # 一键运行脚本
 └── tests/         # 单元测试
 ```
@@ -36,19 +36,16 @@ pip install -r requirements.txt
 python -m llm_train.data.download --dataset tinyshakespeare
 
 # 3. 训练分词器
-python -m llm_train.tokenizer.train_tokenizer \
-    --input data/raw/tinyshakespeare.txt \
-    --output checkpoints/tokenizer \
-    --vocab_size 8000
+python scripts/train_tokenizer.py --input data/raw/tinyshakespeare.txt --output checkpoints/tokenizer --vocab_size 8000
 
 # 4. 预训练小模型 (CPU/MPS/CUDA 都行)
-python scripts/pretrain.py --config configs/tiny.yaml
+python scripts/pretrain.py --config llm_train/configs/tiny.yaml
 
 # 5. 全参微调
-python scripts/finetune.py --config configs/sft.yaml
+python scripts/finetune.py --config llm_train/configs/sft.yaml
 
 # 6. LoRA 微调
-python scripts/lora_train.py --config configs/lora.yaml
+python scripts/lora_train.py --config llm_train/configs/lora.yaml
 
 # 7. 推理
 python scripts/infer.py --checkpoint checkpoints/tiny/best.pt \

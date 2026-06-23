@@ -66,11 +66,13 @@ if _HAS_TORCH:
             self.register_buffer("cos_cached", emb.cos().to(torch.float32), persistent=False)
             self.register_buffer("sin_cached", emb.sin().to(torch.float32), persistent=False)
 
-        def forward(self, x, seq_len):
-            if seq_len > self.max_seq_len:
-                self._set_cos_sin_cache(seq_len)
-            cos = self.cos_cached[:seq_len].to(x.dtype)
-            sin = self.sin_cached[:seq_len].to(x.dtype)
+        def forward(self, x, seq_len, offset=0):
+            """返回 cos/sin, 可带位置偏移 (KV cache 推理时 offset=num_items)."""
+            cache_len = seq_len + offset
+            if cache_len > self.max_seq_len:
+                self._set_cos_sin_cache(cache_len)
+            cos = self.cos_cached[offset:offset + seq_len].to(x.dtype)
+            sin = self.sin_cached[offset:offset + seq_len].to(x.dtype)
             return cos, sin
 
 else:

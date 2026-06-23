@@ -91,8 +91,10 @@ class DataLoader:
         self._indices = list(range(len(dataset)))
 
     def __len__(self):
-        n = len(self._indices) // self.batch_size
-        return n if self.drop_last else math.ceil(n)
+        n = len(self._indices)
+        if self.drop_last:
+            return n // self.batch_size
+        return math.ceil(n / self.batch_size)
 
     def set_epoch(self, epoch: int):
         self.epoch = epoch
@@ -105,12 +107,24 @@ class DataLoader:
 
     def _batch_iter(self, batch_indices):
         xs, ys = [], []
+        masks = []
         for i in batch_indices:
-            x, y = self.dataset[i]
+            item = self.dataset[i]
+            if len(item) == 3:
+                x, y, mask = item
+                masks.append(mask)
+            else:
+                x, y = item
             xs.append(x); ys.append(y)
         if _HAS_TORCH:
-            return torch.stack(xs, 0), torch.stack(ys, 0)
-        return np.stack(xs, 0), np.stack(ys, 0)
+            result = [torch.stack(xs, 0), torch.stack(ys, 0)]
+            if masks:
+                result.append(torch.stack(masks, 0))
+            return tuple(result)
+        result = [np.stack(xs, 0), np.stack(ys, 0)]
+        if masks:
+            result.append(np.stack(masks, 0))
+        return tuple(result)
 
     def __iter__(self):
         self._shuffle_indices()

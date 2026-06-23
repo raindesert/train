@@ -108,10 +108,8 @@ def build_mixed_loader(sources, weights, tokenizer,
             docs = docs[:n]
         ids = []
         for d in docs:
-            enc = tokenizer.encode(d, add_eos=(eos_id is not None))
+            enc = tokenizer.encode(d, add_bos=(bos_id is not None), add_eos=(eos_id is not None))
             ids.extend(enc)
-            if bos_id is not None:
-                ids.append(bos_id)
         bins.append(ids)
         print("  source %s: %d docs, %d tokens" % (src.__class__.__name__, len(docs), len(ids)))
 
@@ -128,7 +126,8 @@ def build_mixed_loader(sources, weights, tokenizer,
 
     out_dir = "./data/processed"
     os.makedirs(out_dir, exist_ok=True)
-    bin_path = "%s/mixed_%d.bin" % (out_dir, sum(len(s) for s in sources))
+    # 用 token 总数命名, 避免重复迭代已耗尽的 source
+    bin_path = "%s/mixed_%d.bin" % (out_dir, len(all_tokens))
     pack_bin(bin_path, all_tokens, vocab_size=tokenizer.vocab_size)
 
     ds = TokenDataset(bin_path, seq_len=seq_len, vocab_size=tokenizer.vocab_size,

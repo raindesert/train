@@ -83,6 +83,31 @@ class BPETokenizer:
         obj.tokenizer = tk
         return obj
 
+    def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> List[int]:
+        ids = self.tokenizer.encode(text).ids
+        bos = self.tokenizer.token_to_id("<s>")
+        eos = self.tokenizer.token_to_id("</s>")
+        if add_bos and bos is not None:
+            ids = [bos] + ids
+        if add_eos and eos is not None:
+            ids = ids + [eos]
+        return ids
+
+    def decode(self, ids: List[int], skip_special: bool = True) -> str:
+        return self.tokenizer.decode(ids, skip_special_tokens=skip_special)
+
+    @property
+    def bos_id(self) -> Optional[int]:
+        return self.tokenizer.token_to_id("<s>")
+
+    @property
+    def eos_id(self) -> Optional[int]:
+        return self.tokenizer.token_to_id("</s>")
+
+    @property
+    def pad_id(self) -> Optional[int]:
+        return self.tokenizer.token_to_id("<pad>")
+
 
 class TokenizerWrapper:
     """统一 encode/decode 接口 (兼容 HF tokenizers 和 transformers)."""

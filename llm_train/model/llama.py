@@ -110,7 +110,7 @@ class LlamaForCausalLM(nn.Module):
         n = sum(p.numel() for p in self.parameters())
         if exclude_embeddings:
             n -= self.embed_tokens.embed.weight.numel()
-            if self.cfg.tie_word_embeddings:
+            if not self.cfg.tie_word_embeddings:
                 n -= self.lm_head.weight.numel()
         return n
 
@@ -131,8 +131,8 @@ class LlamaForCausalLM(nn.Module):
 
         # 初始化 KV cache
         kv_caches = [KVCache() for _ in range(self.cfg.num_layers)]
-        # prefill
-        out = self.forward(input_ids, kv_caches=kv_caches, is_causal=True)
+        # prefill — forward 内部根据 cache 是否为空自动判断 is_causal
+        out = self.forward(input_ids, kv_caches=kv_caches)
         next_logits = out.logits[:, -1, :]  # (B, V)
 
         generated = []
@@ -149,17 +149,18 @@ class LlamaForCausalLM(nn.Module):
                     mask = cum > top_p
                     mask[..., 0] = False
                     sorted_logits[mask] = float("-inf")
-                    logits = torch.zeros_like(logits).scatter(-1, sorted_idx, sorted_logits)
+                    logits = logits.scatter(-1, sorted_idx, sorted_logits)
                 probs = logits.softmax(-1)
                 next_id = torch.multinomial(probs, num_samples=1)  # (B, 1)
             else:
                 next_id = next_logits.argmax(-1, keepdim=True)
 
             generated.append(next_id)
-            finished = finished | (next_id.squeeze(-1) == eos_token_id) if eos_token_id is not None else finished
+            if eos_token_id is not None:
+                finished = finished | (next_id.squeeze(-1) == eos_token_id)
 
             # 用上一步的 id 跑一次 decode
-            out = self.forward(next_id, kv_caches=kv_caches, is_causal=True)
+            out = self.forward(next_id, kv_caches=kv_caches)
             next_logits = out.logits[:, -1, :]
 
             if finished.all():

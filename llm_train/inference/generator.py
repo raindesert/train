@@ -69,7 +69,7 @@ class Generator:
         x = torch.tensor([ids], dtype=torch.long, device=self.device)
         T = x.shape[1]
         kv_caches = [KVCache() for _ in range(self.model.cfg.num_layers)]
-        out = self.model.forward(x, kv_caches=kv_caches, is_causal=True)
+        out = self.model.forward(x, kv_caches=kv_caches)
         next_logits = out.logits[:, -1, :]
         eos = self.tokenizer.eos_id
 
@@ -89,5 +89,5 @@ class Generator:
             if nxt.item() == eos:
                 break
             yield self.tokenizer.decode([nxt.item()], skip_special=True)
-            out = self.model.forward(nxt, kv_caches=kv_caches, is_causal=True)
+            out = self.model.forward(nxt, kv_caches=kv_caches)
             next_logits = out.logits[:, -1, :]

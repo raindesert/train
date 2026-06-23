@@ -40,7 +40,8 @@ def load_checkpoint(path: str,
                     scheduler=None,
                     scaler=None,
                     map_location: str = "cpu") -> Dict:
-    state = torch.load(path, map_location=map_location)
+    # weights_only=False: checkpoint 含 optimizer/scheduler state (非纯 tensor)
+    state = torch.load(path, map_location=map_location, weights_only=False)
     model.load_state_dict(state["model"], strict=True)
     if optimizer is not None and "optimizer" in state:
         optimizer.load_state_dict(state["optimizer"])

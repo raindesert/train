@@ -12,7 +12,8 @@ def _separate_params(model: nn.Module, weight_decay: float):
     for n, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        if p.ndim < 2 or n.endswith(".bias") or "norm" in n.lower() or "embed" in n.lower() and "embed.weight" not in n:
+        # 1D params (bias/norm), norm 层, embedding 层 -> no_decay
+        if p.ndim < 2 or n.endswith(".bias") or "norm" in n.lower() or "embed" in n.lower():
             no_decay.append(p)
         else:
             decay.append(p)

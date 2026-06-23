@@ -16,9 +16,14 @@ class TestPacking(unittest.TestCase):
         try:
             pack_bin(path, tokens, vocab_size=60000)
             arr = load_bin(path)
-            self.assertEqual(arr.dtype, np.uint16)
-            self.assertEqual(arr.shape, (50000,))
-            np.testing.assert_array_equal(arr, np.array(tokens, dtype=np.uint16))
+            try:
+                self.assertEqual(arr.dtype, np.uint16)
+                self.assertEqual(arr.shape, (50000,))
+                np.testing.assert_array_equal(arr, np.array(tokens, dtype=np.uint16))
+            finally:
+                # Release mmap before unlink (Windows file lock)
+                if hasattr(arr, "_mmap") and arr._mmap is not None:
+                    arr._mmap.close()
         finally:
             os.unlink(path)
 
@@ -30,8 +35,13 @@ class TestPacking(unittest.TestCase):
         try:
             pack_bin(path, tokens, vocab_size=100000)
             arr = load_bin(path)
-            self.assertEqual(arr.dtype, np.uint32)
-            np.testing.assert_array_equal(arr, np.array(tokens, dtype=np.uint32))
+            try:
+                self.assertEqual(arr.dtype, np.uint32)
+                np.testing.assert_array_equal(arr, np.array(tokens, dtype=np.uint32))
+            finally:
+                # Release mmap before unlink (Windows file lock)
+                if hasattr(arr, "_mmap") and arr._mmap is not None:
+                    arr._mmap.close()
         finally:
             os.unlink(path)
 

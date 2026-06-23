@@ -26,7 +26,7 @@ def _load_from_dict_and_unwrap():
     Returns:
         (from_dict_fn, unwrap_optional_fn)
     """
-    with open(TRAINER_PATH) as f:
+    with open(TRAINER_PATH, encoding="utf-8") as f:
         src = f.read()
     tree = ast.parse(src)
 

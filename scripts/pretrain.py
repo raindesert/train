@@ -14,7 +14,7 @@ import torch
 from llm_train.model.config import ModelConfig
 from llm_train.model.llama import LlamaForCausalLM
 from llm_train.tokenizer import BPETokenizer, get_tokenizer
-from llm_train.data import TextFileSource, build_mixed_loader
+from llm_train.data import TextFileSource, JsonlSource, build_mixed_loader
 from llm_train.training import Trainer, TrainerConfig
 
 
@@ -50,7 +50,13 @@ def main():
     # 2) data
     inputs = cfg.get("tokenizer", {}).get("input_files") or ["data/raw/tinyshakespeare.txt"]
     inputs = [p for p in inputs if os.path.exists(p)] or ["data/raw/tinyshakespeare.txt"]
-    sources = [TextFileSource(p) for p in inputs]
+
+    def make_source(p):
+        if p.endswith(".jsonl"):
+            return JsonlSource(p, field="text")
+        return TextFileSource(p)
+
+    sources = [make_source(p) for p in inputs]
     weights = [1.0 / len(sources)] * len(sources)
     seq_len = cfg["data"]["seq_len"]
     batch_size = cfg["data"]["batch_size"]
@@ -60,14 +66,26 @@ def main():
     # 简单 eval split: 用同一文件最后 10%
     eval_sources = []
     for p in inputs:
-        with open(p) as f:
-            data = f.read()
-        cut = int(len(data) * 0.9)
-        tmp = f"data/processed/eval_{os.path.basename(p)}"
-        os.makedirs(os.path.dirname(tmp), exist_ok=True)
-        with open(tmp, "w") as g:
-            g.write(data[cut:])
-        eval_sources.append(TextFileSource(tmp))
+        if p.endswith(".jsonl"):
+            import json
+            with open(p, encoding="utf-8") as f:
+                lines = [json.loads(l)["text"] for l in f if l.strip()]
+            cut = int(len(lines) * 0.9)
+            tmp = f"data/processed/eval_{os.path.basename(p)}"
+            os.makedirs(os.path.dirname(tmp), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as g:
+                for line in lines[cut:]:
+                    g.write(json.dumps({"text": line}, ensure_ascii=False) + "\n")
+            eval_sources.append(JsonlSource(tmp, field="text"))
+        else:
+            with open(p, encoding="utf-8") as f:
+                data = f.read()
+            cut = int(len(data) * 0.9)
+            tmp = f"data/processed/eval_{os.path.basename(p)}"
+            os.makedirs(os.path.dirname(tmp), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as g:
+                g.write(data[cut:])
+            eval_sources.append(TextFileSource(tmp))
     _, eval_loader, _ = build_mixed_loader(eval_sources, weights, tk,
                                            seq_len=seq_len, batch_size=batch_size)
 

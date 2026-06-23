@@ -21,6 +21,9 @@ def save_checkpoint(path: str,
         "epoch": epoch,
         "metrics": metrics or {},
     }
+    # 保存 model config（用于推理时重建模型）
+    if hasattr(model, "cfg") and model.cfg is not None:
+        state["model_cfg"] = model.cfg.to_dict()
     if optimizer is not None:
         state["optimizer"] = optimizer.state_dict()
     if scheduler is not None:

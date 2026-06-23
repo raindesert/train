@@ -57,6 +57,45 @@ class JsonlSource(_BaseSource):
                     yield obj[self.field]
 
 
+class ChatMLSource(_BaseSource):
+    """ChatML 格式 jsonl: {"conversations": [{"role": "...", "content": "..."}, ...]}
+
+    将 conversations 数组拼装为单一字符串, 格式:
+        <|im_start|>system\n<content><|im_end|>
+        <|im_start|>user\n<content><|im_end|>
+        <|im_start|>assistant\n<content><|im_end|>
+    """
+    def __init__(self, path: str, conversations_field: str = "conversations",
+                 system_field: Optional[str] = None):
+        self.path = path
+        self.conversations_field = conversations_field
+        self.system_field = system_field
+
+    def _format_role(self, role: str) -> str:
+        return f"<|im_start|>{role}"
+
+    def _format_msg(self, role: str, content: str) -> str:
+        return f"{self._format_role(role)}\n{content}<|im_end|>"
+
+    def __iter__(self):
+        with open(self.path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                convs = obj.get(self.conversations_field, [])
+                parts = []
+                for msg in convs:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if not content:
+                        continue
+                    parts.append(self._format_msg(role, content))
+                if parts:
+                    yield "\n".join(parts)
+
+
 class HFDatasetSource(_BaseSource):
     """包装一个 HF dataset, 在 __iter__ 中拉取."""
     def __init__(self, name: str, split: str = "train", field: str = "text",

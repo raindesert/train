@@ -48,8 +48,7 @@ python scripts/finetune.py --config llm_train/configs/sft.yaml
 python scripts/lora_train.py --config llm_train/configs/lora.yaml
 
 # 7. 推理
-python scripts/infer.py --checkpoint checkpoints/tiny/best.pt \
-    --tokenizer checkpoints/tokenizer --prompt "Once upon a time"
+python scripts/infer.py --checkpoint checkpoints/tiny/best.pt --tokenizer checkpoints/tokenizer --prompt "Once upon a time"
 ```
 
 ## 模型规模

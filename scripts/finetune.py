@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """全参微调 (SFT) — 与 pretrain.py 共用 Trainer."""
-import argparse, os, sys, yaml
+import argparse, json, os, sys, yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
@@ -8,7 +8,20 @@ from llm_train.model.config import ModelConfig
 from llm_train.model.llama import LlamaForCausalLM
 from llm_train.tokenizer import get_tokenizer
 from llm_train.training import Trainer, TrainerConfig
-from llm_train.data import JsonlSource, TextFileSource, build_mixed_loader
+from llm_train.data import JsonlSource, TextFileSource, ChatMLSource, build_mixed_loader
+
+
+def make_source(path: str, field: str = "text"):
+    if path.endswith(".jsonl"):
+        # 自动检测 ChatML 格式 (conversations 数组)
+        with open(path, encoding="utf-8") as f:
+            first_line = f.readline()
+            if first_line:
+                obj = json.loads(first_line)
+                if "conversations" in obj:
+                    return ChatMLSource(path)
+        return JsonlSource(path, field=field)
+    return TextFileSource(path)
 
 
 def main():
@@ -24,7 +37,7 @@ def main():
     tk = get_tokenizer(args.tokenizer, kind="bpe")
     cfg["model"]["vocab_size"] = tk.vocab_size
 
-    src = JsonlSource(args.data, field=args.field) if args.data.endswith(".jsonl") else TextFileSource(args.data)
+    src = make_source(args.data, field=args.field)
     _, loader, _ = build_mixed_loader([src], [1.0], tk,
                                       seq_len=cfg["data"]["seq_len"],
                                       batch_size=cfg["data"]["batch_size"])

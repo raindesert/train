@@ -27,16 +27,19 @@ def main():
         model = LlamaForCausalLM.from_pretrained(ckpt, map_location="cpu")
     else:
         from llm_train.model.config import ModelConfig
-        cfg_dir = os.path.dirname(os.path.dirname(ckpt))
-        cfg_path = os.path.join(cfg_dir, "config.json")
-        cfg = ModelConfig.load(cfg_path) if os.path.exists(cfg_path) else None
-        if cfg is None:
-            raise FileNotFoundError(f"找不到 {cfg_path}; 请传目录")
+        sd = torch.load(ckpt, map_location="cpu", weights_only=False)
+        # 优先从 checkpoint 读取 config，否则尝试 config.json
+        if "model_cfg" in sd:
+            cfg = ModelConfig.from_dict(sd["model_cfg"])
+        else:
+            cfg_dir = os.path.dirname(os.path.dirname(ckpt))
+            cfg_path = os.path.join(cfg_dir, "config.json")
+            cfg = ModelConfig.load(cfg_path) if os.path.exists(cfg_path) else None
+            if cfg is None:
+                raise FileNotFoundError(f"找不到 {cfg_path}; 请传目录")
         model = LlamaForCausalLM(cfg)
-        sd = torch.load(ckpt, map_location="cpu")
-        if "model" in sd:
-            sd = sd["model"]
-        model.load_state_dict(sd)
+        model_sd = sd["model"] if "model" in sd else sd
+        model.load_state_dict(model_sd)
 
     tk = get_tokenizer(args.tokenizer, kind="bpe")
     gen = TextGenerator(model, tk)

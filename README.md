@@ -60,12 +60,7 @@ ChatML 格式示例：
 如果数据文件超过 500MB，需要分片处理避免 OOM：
 
 ```bash
-python scripts/split_tokenize.py \
-    --input data/raw/your_data.jsonl \
-    --output data/processed/your_data \
-    --lines_per_chunk 100000 \
-    --vocab_size 20000 \
-    --train_tokenizer
+python scripts/split_tokenize.py --input data/raw/your_data.jsonl --output data/processed/your_data --lines_per_chunk 100000 --vocab_size 20000 --train_tokenizer
 ```
 
 参数说明：
@@ -81,11 +76,7 @@ python scripts/split_tokenize.py \
 如果数据量小于 500MB，可以直接训练 tokenizer：
 
 ```bash
-python scripts/train_tokenizer.py \
-    --input data/raw/your_data.jsonl \
-    --output checkpoints/tokenizer \
-    --vocab_size 20000 \
-    --limit 500000
+python scripts/train_tokenizer.py --input data/raw/your_data.jsonl --output checkpoints/tokenizer --vocab_size 20000 --limit 500000
 ```
 
 `--limit` 限制训练行数，避免 OOM。词表不需要全量数据。
@@ -143,10 +134,7 @@ training:
 准备微调数据（ChatML 格式），然后：
 
 ```bash
-python scripts/finetune.py \
-    --config llm_train/configs/sft.yaml \
-    --data data/raw/sft_data.jsonl \
-    --tokenizer checkpoints/tokenizer
+python scripts/finetune.py --config llm_train/configs/sft.yaml --data data/raw/sft_data.jsonl --tokenizer checkpoints/tokenizer
 ```
 
 会自动检测 `conversations` 字段并使用 ChatML 格式。
@@ -154,19 +142,13 @@ python scripts/finetune.py \
 ### 第六步：LoRA 微调
 
 ```bash
-python scripts/lora_train.py \
-    --config llm_train/configs/lora.yaml \
-    --data data/raw/sft_data.jsonl \
-    --tokenizer checkpoints/tokenizer
+python scripts/lora_train.py --config llm_train/configs/lora.yaml --data data/raw/sft_data.jsonl --tokenizer checkpoints/tokenizer
 ```
 
 ### 第七步：推理
 
 ```bash
-python scripts/infer.py \
-    --checkpoint checkpoints/your_model/best.pt \
-    --tokenizer checkpoints/tokenizer \
-    --prompt "Once upon a time"
+python scripts/infer.py --checkpoint checkpoints/your_model/best.pt --tokenizer checkpoints/tokenizer --prompt "Once upon a time"
 ```
 
 支持参数：`--max_new_tokens`, `--temperature`, `--top_k`, `--top_p`, `--no_sample`

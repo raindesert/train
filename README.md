@@ -97,6 +97,8 @@ data:
   seq_len: 1024
   batch_size: 16
   grad_accum: 4
+  bin_path: data/processed/your_data.bin   # 分片处理后的 bin 文件
+  eval_bin_path: data/processed/your_data_eval.bin
 
 tokenizer:
   path: checkpoints/tokenizer   # 直接加载已训练的 tokenizer

@@ -147,7 +147,8 @@ def build_mixed_loader(sources, weights, tokenizer,
 
     out_dir = "./data/processed"
     os.makedirs(out_dir, exist_ok=True)
-    bin_path = "%s/mixed_stream.bin" % out_dir
+    import uuid
+    bin_path = "%s/mixed_%s.bin" % (out_dir, uuid.uuid4().hex[:8])
 
     # 流式写入, 不在内存中累积全部 tokens
     pack_bin(bin_path, token_stream(), vocab_size=tokenizer.vocab_size, buffer_size=500000)

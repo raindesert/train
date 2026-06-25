@@ -17,7 +17,7 @@ tokenizer:
   vocab_size: 32000
   min_frequency: 3
   input_files:
-    - data/raw/pretrain_t2t_mini.jsonl
+    - data/raw/pretrain_t2t_mini_sample.jsonl
 
 training:
   max_steps: 10000
@@ -32,3 +32,5 @@ training:
   eval_every: 500
   save_every: 1000
   out_dir: ./checkpoints/small
+  resume: ./checkpoints/small/latest.pt
+

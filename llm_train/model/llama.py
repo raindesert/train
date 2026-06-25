@@ -65,15 +65,27 @@ class LlamaForCausalLM(nn.Module):
             self.lm_head.weight = self.embed_tokens.embed.weight
 
         self.apply(self._init_weights)
+        self._init_residual()
 
     def _init_weights(self, m):
-        # 标准 Transformer 初始化: Linear 正态(std=0.02), Embedding 正态(std=0.02)
         if isinstance(m, nn.Linear):
             nn.init.normal_(m.weight, std=self.cfg.initializer_range)
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
         elif isinstance(m, nn.Embedding):
             nn.init.normal_(m.weight, std=self.cfg.initializer_range)
+
+    def _init_residual(self):
+        """Scale down attention & MLP output projections for stable training on deep nets.
+        
+        Standard init (std=0.02) causes residual stream variance to grow with depth.
+        Scaling by 1/sqrt(2*num_layers) keeps activation variance ~O(1) at init.
+        Reference: DeepNet (https://arxiv.org/abs/2203.00555), LLaMA-Stable init.
+        """
+        std = self.cfg.initializer_range / math.sqrt(2.0 * self.cfg.num_layers)
+        for layer in self.layers:
+            nn.init.normal_(layer.attn.o_proj.weight, std=std)
+            nn.init.normal_(layer.mlp.down_proj.weight, std=std)
 
     def forward(self,
                 input_ids: torch.Tensor,                 # (B, T)

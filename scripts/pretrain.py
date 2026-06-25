@@ -3,7 +3,7 @@
 
 流程:
     1. 读 YAML 配置 (model / data / training)
-    2. 构造分词器 (从指定路径加载, 或基于 input_files 临时训练)
+    2. 构造分词器 (从指定路径加载)
     3. 构造数据集 (从 --bin 直接加载, 或从 input_files 打包)
     4. 构造模型 + Trainer, 训练, 评估
 """
@@ -23,6 +23,14 @@ def load_cfg(p):
         return yaml.safe_load(f)
 
 
+class _WrapSource:
+    """Wrap a list of strings as a data source."""
+    def __init__(self, docs):
+        self.docs = docs
+    def __iter__(self):
+        yield from self.docs
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
@@ -34,8 +42,8 @@ def main():
     if tok_dir and os.path.exists(tok_dir):
         tk = get_tokenizer(tok_dir, kind="bpe")
     else:
-        # 训练一次性 tokenizer
         inputs = cfg["tokenizer"].get("input_files") or ["data/raw/tinyshakespeare.txt"]
+        print("  training tokenizer on the fly (consider pre-training for reproducibility)")
         bp = BPETokenizer(vocab_size=cfg["tokenizer"]["vocab_size"],
                           min_frequency=cfg["tokenizer"].get("min_frequency", 2))
         bp.train([p for p in inputs if os.path.exists(p)])
@@ -50,22 +58,22 @@ def main():
     # 2) data
     seq_len = cfg["data"]["seq_len"]
     batch_size = cfg["data"]["batch_size"]
+    num_workers = cfg["data"].get("num_workers", 0)
     bin_path = cfg["data"].get("bin_path")
     eval_bin_path = cfg["data"].get("eval_bin_path")
 
     if bin_path and os.path.exists(bin_path):
-        # 直接从已处理的 bin 加载（由 split_tokenize.py 生成）
-        print(f"  loading data from {bin_path}")
         ds = TokenDataset(bin_path, seq_len=seq_len, vocab_size=tk.vocab_size,
                           bos_id=tk.bos_id, eos_id=tk.eos_id)
-        train_loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
+        train_loader = DataLoader(ds, batch_size=batch_size, shuffle=True,
+                                  drop_last=True, num_workers=num_workers)
         eval_loader = None
         if eval_bin_path and os.path.exists(eval_bin_path):
             eval_ds = TokenDataset(eval_bin_path, seq_len=seq_len, vocab_size=tk.vocab_size,
                                    bos_id=tk.bos_id, eos_id=tk.eos_id)
-            eval_loader = DataLoader(eval_ds, batch_size=batch_size, shuffle=False, drop_last=True)
+            eval_loader = DataLoader(eval_ds, batch_size=batch_size, shuffle=False,
+                                     drop_last=True, num_workers=num_workers)
     else:
-        # 从原始文件打包
         inputs = cfg.get("tokenizer", {}).get("input_files") or ["data/raw/tinyshakespeare.txt"]
         inputs = [p for p in inputs if os.path.exists(p)] or ["data/raw/tinyshakespeare.txt"]
 
@@ -79,31 +87,17 @@ def main():
         _, train_loader, _ = build_mixed_loader(sources, weights, tk,
                                                 seq_len=seq_len, batch_size=batch_size)
 
-        # 简单 eval split: 用同一文件最后 10%
-        eval_sources = []
-        for p in inputs:
-            if p.endswith(".jsonl"):
-                import json
-                with open(p, encoding="utf-8") as f:
-                    lines = [json.loads(l)["text"] for l in f if l.strip()]
-                cut = int(len(lines) * 0.9)
-                tmp = f"data/processed/eval_{os.path.basename(p)}"
-                os.makedirs(os.path.dirname(tmp), exist_ok=True)
-                with open(tmp, "w", encoding="utf-8") as g:
-                    for line in lines[cut:]:
-                        g.write(json.dumps({"text": line}, ensure_ascii=False) + "\n")
-                eval_sources.append(JsonlSource(tmp, field="text"))
-            else:
-                with open(p, encoding="utf-8") as f:
-                    data = f.read()
-                cut = int(len(data) * 0.9)
-                tmp = f"data/processed/eval_{os.path.basename(p)}"
-                os.makedirs(os.path.dirname(tmp), exist_ok=True)
-                with open(tmp, "w", encoding="utf-8") as g:
-                    g.write(data[cut:])
-                eval_sources.append(TextFileSource(tmp))
-        _, eval_loader, _ = build_mixed_loader(eval_sources, weights, tk,
-                                               seq_len=seq_len, batch_size=batch_size)
+        # eval split: 取每个 source 最后 10% 文档 (不写临时文件)
+        eval_docs = []
+        for src in sources:
+            docs = list(iter(src))
+            cut = int(len(docs) * 0.9)
+            eval_docs.extend(docs[cut:])
+        eval_sources = [_WrapSource(eval_docs)] if eval_docs else []
+        eval_loader = None
+        if eval_sources:
+            _, eval_loader, _ = build_mixed_loader(eval_sources, [1.0], tk,
+                                                   seq_len=seq_len, batch_size=batch_size)
 
     # 3) model
     model_cfg = ModelConfig.from_dict(cfg["model"])
@@ -112,7 +106,8 @@ def main():
 
     # 4) trainer
     tcfg = TrainerConfig.from_dict(cfg["training"])
-    tcfg.grad_accum = cfg["data"].get("grad_accum", 1)
+    if "grad_accum" in cfg.get("data", {}):
+        tcfg.grad_accum = cfg["data"]["grad_accum"]
     trainer = Trainer(model, train_loader, eval_loader, tcfg)
     trainer.train()
 

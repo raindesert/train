@@ -60,7 +60,7 @@ ChatML 格式示例：
 如果数据文件超过 500MB，需要分片处理避免 OOM：
 
 ```bash
-python scripts/split_tokenize.py --input data/raw/your_data.jsonl --output data/processed/your_data --lines_per_chunk 100000 --vocab_size 20000 --train_tokenizer
+python scripts/split_tokenize.py --input data/raw/your_data.jsonl --output data/processed/your_data --lines_per_chunk 100000 --vocab_size 32000 --train_tokenizer
 ```
 
 参数说明：
@@ -76,7 +76,7 @@ python scripts/split_tokenize.py --input data/raw/your_data.jsonl --output data/
 如果数据量小于 500MB，可以直接训练 tokenizer：
 
 ```bash
-python scripts/train_tokenizer.py --input data/raw/your_data.jsonl --output checkpoints/tokenizer --vocab_size 20000 --limit 500000
+python scripts/train_tokenizer.py --input data/raw/your_data.jsonl --output checkpoints/tokenizer --vocab_size 8000 --limit 500000
 ```
 
 `--limit` 限制训练行数，避免 OOM。词表不需要全量数据。

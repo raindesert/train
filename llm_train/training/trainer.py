@@ -234,8 +234,7 @@ class Trainer:
                 if (self.step + 1) % self.cfg.grad_accum == 0:
                     if self.scaler is not None:
                         self.scaler.unscale_(self.optimizer)
-                    # grad_clip 是 YAML 使用的字段, max_grad_norm 兼容旧配置
-                    clip = self.cfg.grad_clip if self.cfg.grad_clip != 1.0 else self.cfg.max_grad_norm
+                    clip = self.cfg.max_grad_norm
                     if clip > 0:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip)
                     if self.scaler is not None:
